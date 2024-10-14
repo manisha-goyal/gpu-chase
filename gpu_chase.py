@@ -16,10 +16,9 @@ def check_and_create_vm_in_zone(compute_client, project_id, zone, gpu_type, netw
                 instance_name = f"{instance_name_base}-{str(uuid.uuid4())[:4]}"
                 print(f"GPU {gpu_type} is available in {zone}. Creating VM {instance_name}...")
 
-                operation = create_vm_with_gpu(
+                create_vm_with_gpu(
                     compute_client, project_id, zone, instance_name, network, subnetwork, machine_type, image_project, image_family, gpu_type
                 )
-                wait_for_operation(operation, project_id, zone)
                 print(f"VM {instance_name} successfully created in zone {zone}.")
                 return True, instance_name  # Successfully created VM
         print(f"No GPU {gpu_type} available in zone {zone}.")
@@ -65,22 +64,21 @@ def create_vm_with_gpu(compute_client, project_id, zone, instance_name, network,
     instance.guest_accelerators = [guest_accelerator]
     instance.scheduling = scheduling
 
-    # Insert the VM instance
+    # Insert the VM instance and wait for operation to complete
     operation = compute_client.insert(project=project_id, zone=zone, instance_resource=instance)
 
-    return operation
-
-def wait_for_operation(operation, project_id, zone):
-    """Waits for the VM creation operation to finish."""
+    # Waiting logic for VM creation completion
     operations_client = compute_v1.ZoneOperationsClient()
-
+    print(f"Waiting for operation to create VM {instance_name} in {zone} to complete...")
     while True:
         result = operations_client.get(project=project_id, zone=zone, operation=operation.name)
         if result.status == compute_v1.Operation.Status.DONE:
             if 'error' in result:
                 raise GoogleAPICallError(result.error.errors[0].code)
-            return result
+            break
         time.sleep(5)
+
+    return operation
 
 def instance_exists(compute_client, project_id, zone, instance_name):
     """Check if the instance exists."""
@@ -94,7 +92,18 @@ def delete_instance(compute_client, project_id, zone, instance_name):
     """Deletes the specified Compute Engine instance."""
     try:
         operation = compute_client.delete(project=project_id, zone=zone, instance=instance_name)
-        wait_for_operation(operation, project_id, zone)
+        
+        # Waiting logic for VM deletion completion
+        operations_client = compute_v1.ZoneOperationsClient()
+        print(f"Waiting for operation to delete VM {instance_name} in {zone} to complete...")
+        while True:
+            result = operations_client.get(project=project_id, zone=zone, operation=operation.name)
+            if result.status == compute_v1.Operation.Status.DONE:
+                if 'error' in result:
+                    raise GoogleAPICallError(result.error.errors[0].code)
+                break
+            time.sleep(5)
+
         print(f"Deleted VM instance {instance_name}.\n")
     except GoogleAPICallError as e:
         print(f"Failed to delete VM instance {instance_name} due to: {e}\n")
@@ -138,6 +147,6 @@ if __name__ == "__main__":
     image_project = "ml-images"
     image_family = "c1-deeplearning-tf-1-15-cu110-v20221107-debian-10"
     gpu_type = "nvidia-tesla-t4"
-    max_vms = 1
+    max_vms = 10
 
     find_and_create_vms(project_id, network, subnetwork, machine_type, image_family, image_project, gpu_type, max_vms)
